@@ -9,6 +9,7 @@ public class ConsensusModule {
     private final Socket clientSocket;
     private final ObjectInputStream inputStream;
     private final ObjectOutputStream outputStream;
+    private boolean connected = false;
     private int nextIndex;
     private int matchIndex = 0;
 
@@ -39,4 +40,14 @@ public class ConsensusModule {
     public ObjectOutputStream getOutputStream() {
         return outputStream;
     }
+
+    public boolean isConnected() {
+        return connected;
+    }
+
+    public void setConnected(boolean connected) {
+        this.connected = connected;
+    }
+
+
 }

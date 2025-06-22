@@ -1,6 +1,6 @@
 package hr.fipu.raft.rpc;
 
-import hr.fipu.raft.component.ConsensusModule;
+import hr.fipu.raft.component.Connection;
 import hr.fipu.raft.utils.Entry;
 
 import java.io.IOException;
@@ -25,7 +25,7 @@ public class AppendEntriesCall implements RemoteProcedureCall {
     }
 
     @Override
-    public RpcResponse execute(final ConsensusModule socket) {
+    public RpcResponse execute(final Connection socket) {
         try {
             ObjectOutputStream outputStream = socket.getOutputStream();
             ObjectInputStream inputStream = socket.getInputStream();
@@ -33,7 +33,7 @@ public class AppendEntriesCall implements RemoteProcedureCall {
             RpcResponse response = (RpcResponse) inputStream.readObject();
             System.out.println("AppendEntriesCall sent to " + socket.getPort() + " with response: " + response.isSuccess());
             return response;
-        } catch (IOException | ClassNotFoundException e) {
+        } catch (IOException | ClassNotFoundException | NullPointerException e) {
             System.err.println("Failed to send RequestVoteCall: " + e.getMessage());
             return new RpcResponse(-1, false);
         }

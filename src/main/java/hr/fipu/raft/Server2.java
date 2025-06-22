@@ -1,7 +1,10 @@
 package hr.fipu.raft;
 
 import hr.fipu.raft.component.RaftServer;
+import hr.fipu.raft.component.ElectionStarter;
 import hr.fipu.raft.utils.ServerStatus;
+
+import java.io.IOException;
 
 public class Server2 {
 
@@ -22,7 +25,6 @@ public class Server2 {
 
         while (true) {
             server.handleLeaderRequests();
-            server.startElection();
             if (server.getStatus() == ServerStatus.LEADER) {
                 server.sendHeartbeat();
             }

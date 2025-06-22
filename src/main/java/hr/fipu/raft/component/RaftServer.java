@@ -3,7 +3,6 @@ package hr.fipu.raft.component;
 import hr.fipu.raft.rpc.AppendEntriesCall;
 import hr.fipu.raft.rpc.RequestVoteCall;
 import hr.fipu.raft.rpc.RpcResponse;
-import hr.fipu.raft.utils.Connection;
 import hr.fipu.raft.utils.Entry;
 import hr.fipu.raft.utils.ServerStatus;
 
@@ -13,7 +12,6 @@ import java.io.ObjectOutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
-import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -26,9 +24,9 @@ public class RaftServer {
     private final List<Entry> log;
     private long votedFor;
     private final ServerSocket serverSocket;
-    private final List<ConsensusModule> consensusModule = new LinkedList<>();
-    private final List<Integer> ports = new LinkedList<>(Arrays.asList(8080, 8081, 8082, 8083, 8084));
-    private final List<Integer> disconnectedPorts;
+    private Socket clientSocket;
+    private final List<Connection> consensusModule;
+    private final int[] ports = {8080, 8081, 8082};
 
     private final int commitIndex = 0;
     private final int lastApplied = 0;
@@ -47,7 +45,37 @@ public class RaftServer {
         } catch (Exception e) {
             throw new RuntimeException("Failed to start server on port " + port, e);
         }
-        this.disconnectedPorts = new LinkedList<>(this.ports);
+        this.consensusModule = createConnections();
+    }
+
+    public static int calculateTimeout(long id) {
+        long currentMillis = System.currentTimeMillis() + (id * 1000L);
+        int rangeSize = 10000 - 6000;
+        return (int) (currentMillis % rangeSize) + 6000;
+    }
+
+    public void reconnect(Connection connection) {
+        this.consensusModule.remove(connection);
+        try {
+            connection.getSocket().close();
+        } catch (IOException e) {
+            System.err.println("Failed to close socket for server on port " + connection.getPort() + ": " + e.getMessage());
+        }
+        Connection connectionToReconnect = new Connection(connection.getHost(), connection.getPort());
+        this.consensusModule.add(connectionToReconnect);
+        System.out.println("Re-establishing connection to server on port " + connection.getPort());
+        connect(connectionToReconnect);
+    }
+
+    public void connect(Connection connection) {
+        Thread thread = new Thread(connection, "ConnectionThread-" + connection.getPort());
+        thread.start();
+        try {
+            thread.join();
+        } catch (InterruptedException e) {
+            System.err.println("Failed to re-establish connection to server on port " + connection.getPort() + ": " + e.getMessage());
+
+        }
     }
 
     public void startElection() {
@@ -55,22 +83,22 @@ public class RaftServer {
         this.status = ServerStatus.CANDIDATE;
         this.term++;
         this.votedFor = this.id;
-        disconnectedPorts.clear();
-        disconnectedPorts.addAll(ports);
-        establishConnections();
 
         System.out.println("Sending RequestVote RPC to other servers");
         RequestVoteCall request = new RequestVoteCall(this.term, this.id, -1, -1);
 
         int votesReceived = 1;
 
-        for (ConsensusModule consensusModule : this.consensusModule) {
-            RpcResponse response = request.execute(consensusModule);
+        for (Connection connection : this.consensusModule) {
+            if (!connection.getSocket().isConnected()) {
+                connect(connection);
+            }
+            RpcResponse response = request.execute(connection);
             if (response.isSuccess()) {
-                System.out.println("Vote granted by server on port " + consensusModule.getPort());
+                System.out.println("Vote granted by server on port " + connection.getPort());
                 votesReceived++;
             } else {
-                System.out.println("Vote denied by server on port " + consensusModule.getPort());
+                System.out.println("Vote denied by server on port " + connection.getPort());
             }
         }
 
@@ -94,17 +122,12 @@ public class RaftServer {
 
 
         while (true) {
-            if (this.consensusModule.isEmpty()) {
-                System.out.println("No followers available, cannot send heartbeat");
-                fold();
-                return;
-            }
             try {
                 Thread.sleep(2000);
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             }
-            for (ConsensusModule socket : this.consensusModule) {
+            for (Connection socket : this.consensusModule) {
                 RpcResponse response = heartbeat.execute(socket);
                 if (response.isSuccess()) {
                     System.out.println("Heartbeat sent successfully to server on port " + socket.getPort());
@@ -116,6 +139,7 @@ public class RaftServer {
                         return;
                     }
                     System.out.println("Failed to send heartbeat to server on port " + socket.getPort());
+                    reconnect(socket);
                 }
             }
         }
@@ -127,7 +151,7 @@ public class RaftServer {
         boolean voteAvailable = this.votedFor == -1 || this.votedFor == candidateId;
         boolean candidateUpToDate = this.term <= term; // TODO check if candidate's log is at least as up-to-date as this server's log
 
-        if (candidateUpToDate && voteAvailable) {
+        if (candidateUpToDate) {
             System.out.println("Granting vote for candidate " + candidateId + " in term " + term);
             this.term = term;
             this.votedFor = candidateId;
@@ -155,7 +179,6 @@ public class RaftServer {
             return new RpcResponse(this.term, true);
         }
 
-
         return new RpcResponse(this.term, true);
     }
 
@@ -171,52 +194,39 @@ public class RaftServer {
         return serverSocket;
     }
 
+    public Socket getClientSocket() {
+        return clientSocket;
+    }
+
     public ServerStatus getStatus() {
         return status;
     }
 
-    private void establishConnections() {
-        this.consensusModule.clear();
+    private List<Connection> createConnections() {
         try {
-            Thread.sleep(5000);
+            Thread.sleep(6000);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
 
-        for (Integer port : this.disconnectedPorts) {
+        List<Connection> connections = new LinkedList<>();
+        for (Integer port : this.ports) {
             if (port != this.port) {
                 Connection connection = new Connection(this.ipAddress, port);
-                Thread thread = new Thread(connection, "ConnectionThread-" + port);
-                thread.start();
-                try {
-                    thread.join();
-                    Socket socket = connection.getSocket();
-                    if (socket == null || !socket.isConnected()) {
-                        System.err.println("Failed to connect to server on port " + port);
-                        continue;
-                    }
-                    ObjectOutputStream outputStream = new ObjectOutputStream(socket.getOutputStream());
-                    ObjectInputStream inputStream = new ObjectInputStream(socket.getInputStream());
-                    ConsensusModule consensusModule = new ConsensusModule(port, socket, inputStream, outputStream, this.log.size());
-                    this.consensusModule.add(consensusModule);
-                } catch (IOException | InterruptedException e) {
-                    System.err.println("Failed to create streams for server on port " + port + ": " + e.getMessage());
-                }
-
+                connections.add(connection);
             }
         }
+        return connections;
     }
 
     public void handleLeaderRequests() {
         try {
-            Socket socket = serverSocket.accept();
-            long currentMillis = System.currentTimeMillis() + (this.id * 100);
-            int rangeSize = 10000 - 6000;
-            int timeout = (int) (currentMillis % rangeSize) + 6000;
+            int timeout = calculateTimeout((int) this.id) * 2;
             System.out.println(timeout + "ms");
-            socket.setSoTimeout(timeout);
-            ObjectOutputStream outputStream = new ObjectOutputStream(socket.getOutputStream());
-            ObjectInputStream inputStream = new ObjectInputStream(socket.getInputStream());
+            this.serverSocket.setSoTimeout(timeout);
+            this.clientSocket = serverSocket.accept();
+            ObjectOutputStream outputStream = new ObjectOutputStream(this.clientSocket.getOutputStream());
+            ObjectInputStream inputStream = new ObjectInputStream(this.clientSocket.getInputStream());
 
             while (true) {
                 try {
@@ -233,11 +243,21 @@ public class RaftServer {
                     }
                 } catch (SocketTimeoutException se) {
                     System.out.println("Socket timeout, no request received. Breaking out of the loop.");
+                    Thread requestHandlerThread = new Thread(new ElectionStarter(this));
+                    requestHandlerThread.start();
                     break;
                 }
             }
+        } catch (SocketTimeoutException se) {
+            if (this.status == ServerStatus.LEADER) {
+                System.out.println("Socket timeout while waiting for requests. No other leader to wait for.");
+                return;
+            }
+            System.out.println("Socket timeout, no request received. Breaking out of the loop.");
+            Thread requestHandlerThread = new Thread(new ElectionStarter(this));
+            requestHandlerThread.start();
         } catch (ClassNotFoundException | IOException e) {
-            e.printStackTrace();
+            System.err.println("Error handling leader requests: " + e.getMessage());
         }
     }
 

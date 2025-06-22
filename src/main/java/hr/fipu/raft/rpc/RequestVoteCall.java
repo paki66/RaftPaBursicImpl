@@ -1,6 +1,6 @@
 package hr.fipu.raft.rpc;
 
-import hr.fipu.raft.component.ConsensusModule;
+import hr.fipu.raft.component.Connection;
 
 import java.io.*;
 
@@ -21,7 +21,7 @@ public class RequestVoteCall implements RemoteProcedureCall {
     }
 
     @Override
-    public RpcResponse execute(final ConsensusModule socket) {
+    public RpcResponse execute(final Connection socket) {
         try {
             ObjectOutputStream outputStream = socket.getOutputStream();
             ObjectInputStream inputStream = socket.getInputStream();
@@ -29,7 +29,7 @@ public class RequestVoteCall implements RemoteProcedureCall {
             RpcResponse response = (RpcResponse) inputStream.readObject();
             System.out.println("RequestVoteCall sent to " + socket.getPort() + " with response: " + response.isSuccess());
             return response;
-        } catch (IOException | ClassNotFoundException e) {
+        } catch (IOException | NullPointerException | ClassNotFoundException e) {
             System.err.println("Failed to send RequestVoteCall: " + e.getMessage() + " to " + socket.getPort());
             return new RpcResponse(-1, false);
         }

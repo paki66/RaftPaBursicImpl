@@ -1,9 +1,9 @@
 package hr.fipu.raft.rpc;
 
-import hr.fipu.raft.component.ConsensusModule;
+import hr.fipu.raft.component.Connection;
 
 import java.io.Serializable;
 
 public interface RemoteProcedureCall extends Serializable {
-    RpcResponse execute(ConsensusModule socket);
+    RpcResponse execute(Connection socket);
 }
