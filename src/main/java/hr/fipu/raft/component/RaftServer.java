@@ -3,15 +3,15 @@ package hr.fipu.raft.component;
 import hr.fipu.raft.rpc.AppendEntriesCall;
 import hr.fipu.raft.rpc.RequestVoteCall;
 import hr.fipu.raft.rpc.RpcResponse;
+import hr.fipu.raft.utils.ClientConnection;
+import hr.fipu.raft.utils.ClusterConnection;
 import hr.fipu.raft.utils.Entry;
 import hr.fipu.raft.utils.ServerStatus;
 
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.SocketTimeoutException;
+import java.net.*;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -25,7 +25,7 @@ public class RaftServer {
     private long votedFor;
     private final ServerSocket serverSocket;
     private Socket clientSocket;
-    private final List<Connection> consensusModule;
+    private List<Connection> consensusModule;
     private final int[] ports = {8080, 8081, 8082};
 
     private final int commitIndex = 0;
@@ -45,7 +45,6 @@ public class RaftServer {
         } catch (Exception e) {
             throw new RuntimeException("Failed to start server on port " + port, e);
         }
-        this.consensusModule = createConnections();
     }
 
     public static int calculateTimeout(long id) {
@@ -61,20 +60,20 @@ public class RaftServer {
         } catch (IOException e) {
             System.err.println("Failed to close socket for server on port " + connection.getPort() + ": " + e.getMessage());
         }
-        Connection connectionToReconnect = new Connection(connection.getHost(), connection.getPort());
+        Connection connectionToReconnect = new Connection(connection.getHost(), connection.getPort(), this.port);
         this.consensusModule.add(connectionToReconnect);
         System.out.println("Re-establishing connection to server on port " + connection.getPort());
         connect(connectionToReconnect);
     }
 
     public void connect(Connection connection) {
-        Thread thread = new Thread(connection, "ConnectionThread-" + connection.getPort());
-        thread.start();
+//        Thread thread = new Thread(connection, "ConnectionThread-" + connection.getPort());
+//        thread.start();
+        connection.start();
         try {
-            thread.join();
+            connection.join();
         } catch (InterruptedException e) {
             System.err.println("Failed to re-establish connection to server on port " + connection.getPort() + ": " + e.getMessage());
-
         }
     }
 
@@ -83,6 +82,7 @@ public class RaftServer {
         this.status = ServerStatus.CANDIDATE;
         this.term++;
         this.votedFor = this.id;
+        this.consensusModule = createConnections();
 
         System.out.println("Sending RequestVote RPC to other servers");
         RequestVoteCall request = new RequestVoteCall(this.term, this.id, -1, -1);
@@ -190,64 +190,48 @@ public class RaftServer {
         this.status = ServerStatus.FOLLOWER;
     }
 
-    public ServerSocket getServerSocket() {
-        return serverSocket;
-    }
-
-    public Socket getClientSocket() {
-        return clientSocket;
-    }
-
     public ServerStatus getStatus() {
         return status;
     }
 
     private List<Connection> createConnections() {
-        try {
-            Thread.sleep(6000);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
-
         List<Connection> connections = new LinkedList<>();
         for (Integer port : this.ports) {
             if (port != this.port) {
-                Connection connection = new Connection(this.ipAddress, port);
+                Connection connection = new Connection(this.ipAddress, port, this.port);
                 connections.add(connection);
             }
         }
         return connections;
     }
 
-    public void handleLeaderRequests() {
+    private boolean isPortOutsideCluster(int port) {
+        for (int p : this.ports) {
+            if (p == port) {
+                return false; // Port is part of the cluster
+            }
+        }
+        return true; // Port is outside the cluster
+    }
+
+    public void handleConnectionRequest() {
         try {
-            int timeout = calculateTimeout((int) this.id) * 2;
+            int timeout = calculateTimeout((int) this.id);
             System.out.println(timeout + "ms");
             this.serverSocket.setSoTimeout(timeout);
             this.clientSocket = serverSocket.accept();
-            ObjectOutputStream outputStream = new ObjectOutputStream(this.clientSocket.getOutputStream());
-            ObjectInputStream inputStream = new ObjectInputStream(this.clientSocket.getInputStream());
+            int clientPort = clientSocket.getPort();
 
-            while (true) {
-                try {
-                    Object request = inputStream.readObject();
-
-                    if (request instanceof RequestVoteCall requestVoteCall) {
-                        RpcResponse response = this.handleRequestVoteCall(requestVoteCall);
-                        outputStream.writeObject(response);
-                    } else if (request instanceof AppendEntriesCall appendEntriesRequest) {
-                        RpcResponse response = this.appendEntries(appendEntriesRequest);
-                        outputStream.writeObject(response);
-                    } else {
-                        System.out.println("Received unknown request type: " + request.getClass().getName());
-                    }
-                } catch (SocketTimeoutException se) {
-                    System.out.println("Socket timeout, no request received. Breaking out of the loop.");
-                    Thread requestHandlerThread = new Thread(new ElectionStarter(this));
-                    requestHandlerThread.start();
-                    break;
-                }
+            if (isPortOutsideCluster(clientPort)) {
+                System.out.println("Received request from port " + clientPort + " which is outside the cluster. Waiting to connect.");
+                Thread clientThead = new Thread(new ClientConnection(5000, clientSocket));
+                clientThead.start();
+            } else {
+                System.out.println("Received request from port " + clientPort + " which is part of the cluster. Handling request.");
+                Thread leaderRequestHandlerThread = new Thread(new ClusterConnection(this, clientSocket));
+                leaderRequestHandlerThread.start();
             }
+
         } catch (SocketTimeoutException se) {
             if (this.status == ServerStatus.LEADER) {
                 System.out.println("Socket timeout while waiting for requests. No other leader to wait for.");
@@ -256,12 +240,13 @@ public class RaftServer {
             System.out.println("Socket timeout, no request received. Breaking out of the loop.");
             Thread requestHandlerThread = new Thread(new ElectionStarter(this));
             requestHandlerThread.start();
-        } catch (ClassNotFoundException | IOException e) {
+        } catch (IOException e) {
             System.err.println("Error handling leader requests: " + e.getMessage());
         }
     }
 
-    private RpcResponse handleRequestVoteCall(RequestVoteCall voteRequest) {
+
+    public RpcResponse handleRequestVoteCall(RequestVoteCall voteRequest) {
         System.out.println("Received RequestVoteCall from term: " + voteRequest.getTerm() + " from candidate ID: " + voteRequest.getCandidateId());
         RpcResponse response = this.grantVote(voteRequest.getCandidateId(), voteRequest.getTerm());
 

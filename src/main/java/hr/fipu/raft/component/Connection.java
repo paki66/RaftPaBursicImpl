@@ -6,23 +6,27 @@ import java.io.ObjectOutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 
-public class Connection implements Runnable {
+public class Connection extends Thread {
     private final String host;
     private final int port;
     private final Socket socket;
     private ObjectOutputStream out;
     private ObjectInputStream in;
+    private final int localPort;
 
-    public Connection(String host, int port) {
+    public Connection(String host, int port, int localPort) {
         this.port = port;
         this.host = host;
         this.socket = new Socket();
+        this.localPort = localPort;
     }
 
     @Override
     public synchronized void run() {
         while (!this.socket.isConnected()) {
             try {
+                this.socket.setReuseAddress(true);
+                this.socket.bind(new InetSocketAddress(this.localPort));
                 this.socket.connect(new InetSocketAddress(host, port), 3000);
                 System.out.println("Connected to server on port " + port);
                 break;
@@ -30,7 +34,7 @@ public class Connection implements Runnable {
                 System.err.println("Failed to connect to server on port " + port + ": " + e.getMessage());
             }
             try {
-                Thread.currentThread().wait(3000);
+                this.wait(3000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt(); // Restore interrupted status
                 System.err.println("Connection thread interrupted: " + e.getMessage());
@@ -44,9 +48,9 @@ public class Connection implements Runnable {
                 System.err.println("Failed to create input/output streams: " + e.getMessage());
             }
             try {
-                Thread.currentThread().wait(3000);
+                this.wait(3000);
             } catch (InterruptedException e) {
-                Thread.currentThread().interrupt(); // Restore interrupted status
+                this.interrupt(); // Restore interrupted status
                 System.err.println("Connection thread interrupted: " + e.getMessage());
             }
         }

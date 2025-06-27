@@ -1,10 +1,8 @@
 package hr.fipu.raft;
 
+import hr.fipu.raft.component.ConnectionListener;
 import hr.fipu.raft.component.RaftServer;
-import hr.fipu.raft.component.ElectionStarter;
 import hr.fipu.raft.utils.ServerStatus;
-
-import java.io.IOException;
 
 public class Server2 {
 
@@ -24,7 +22,15 @@ public class Server2 {
 
 
         while (true) {
-            server.handleLeaderRequests();
+            ConnectionListener listener = new ConnectionListener(server);
+            Thread thread = new Thread(listener);
+            thread.start();
+            try {
+                thread.join(); // Wait for the connection listener to finish
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt(); // Restore interrupted status
+                break; // Exit the loop if interrupted
+            }
             if (server.getStatus() == ServerStatus.LEADER) {
                 server.sendHeartbeat();
             }

@@ -34,7 +34,7 @@ public class AppendEntriesCall implements RemoteProcedureCall {
             System.out.println("AppendEntriesCall sent to " + socket.getPort() + " with response: " + response.isSuccess());
             return response;
         } catch (IOException | ClassNotFoundException | NullPointerException e) {
-            System.err.println("Failed to send RequestVoteCall: " + e.getMessage());
+            System.err.println("Failed to send AppendEntriesCall: " + e.getMessage());
             return new RpcResponse(-1, false);
         }
     }

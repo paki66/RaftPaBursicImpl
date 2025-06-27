@@ -22,7 +22,7 @@ public class Server1 {
         while (true) {
 
             server.sendHeartbeat();
-            server.handleLeaderRequests();
+            server.handleConnectionRequest();
             server.startElection();
         }
     }
